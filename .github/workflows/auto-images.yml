@@ -3,10 +3,10 @@ name: 自动更新README图片
 on:
   push:
     paths:
-      - '*.png'    # 当根目录有png变动时触发
-      - '*.jpg'    # 当根目录有jpg变动时触发
-      - '*.gif'    # 当根目录有gif变动时触发
-  workflow_dispatch: # 允许手动点按钮运行
+      - '*.png'
+      - '*.jpg'
+      - '*.gif'
+  workflow_dispatch: # 允许手动点击运行
 
 permissions:
   contents: write
@@ -19,30 +19,38 @@ jobs:
       
       - name: 生成图片列表并更新 README
         run: |
-          # 1. 定义临时文件
+          # 创建临时文件存放图片代码
           echo "" > images_list.md
           
-          # 2. 遍历根目录下的图片文件 (png, jpg, gif)
-          # 注意：这里会按文件名排序
+          # 遍历根目录下的图片文件 (png, jpg, gif)，按名称排序
           find . -maxdepth 1 -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.gif" \) | sort | while read file; do
-            # 去掉前面的 ./
             filename=$(basename "$file")
-            # 不要把删除图层等不需要展示的图放进来，可以在这里加判断，或者统一前缀
-            # 这里生成 Markdown 语法
-            echo "### $filename" >> images_list.md
-            echo "![$filename]($filename)" >> images_list.md
-            echo "" >> images_list.md
+            
+            # 写入图片 HTML 标签，设置宽度为 200px
+            # 如果不需要标题，可以删掉下面这行 echo "#### $filename"
+            echo "#### $filename" >> images_list.md
+            echo "<img src='./$filename' width='200' alt='$filename' style='border-radius: 4px;'>" >> images_list.md
+            echo -e "\n" >> images_list.md
           done
           
-          # 3. 使用 python 脚本把 images_list.md 的内容插入到 README 的标记之间
+          # 使用 Python 脚本将生成的图片代码插入到标记位
           python3 -c "
           import sys
-          
-          with open('README.md', 'r', encoding='utf-8') as f:
+          import os
+
+          readme_path = 'README.md'
+          if not os.path.exists(readme_path):
+              print('README.md 不存在')
+              sys.exit(0)
+
+          with open(readme_path, 'r', encoding='utf-8') as f:
               content = f.read()
           
-          with open('images_list.md', 'r', encoding='utf-8') as f:
-              new_images = f.read()
+          if os.path.exists('images_list.md'):
+              with open('images_list.md', 'r', encoding='utf-8') as f:
+                  new_images = f.read()
+          else:
+              new_images = ''
           
           start_marker = '<!-- IMAGES_START -->'
           end_marker = '<!-- IMAGES_END -->'
@@ -52,15 +60,17 @@ jobs:
               end_idx = content.find(end_marker)
               new_content = content[:start_idx] + '\n' + new_images + content[end_idx:]
               
-              with open('README.md', 'w', encoding='utf-8') as f:
+              with open(readme_path, 'w', encoding='utf-8') as f:
                   f.write(new_content)
+              print('README 已成功更新')
           else:
-              print('未找到标记位置，跳过更新')
+              print('未在 README.md 中找到 <!-- IMAGES_START --> 和 <!-- IMAGES_END --> 标记')
           "
           
-      - name: 提交更改
+      - name: 提交并推送更改
         run: |
-          git config --global user.name 'GitHub Action'
-          git config --global user.email 'action@github.com'
-          # 如果 README 没变化就不提交，防止报错
-          git diff --quiet && git diff --staged --quiet || (git add README.md && git commit -m "Auto update images in README" && git push)
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add README.md
+          # 只有在有变动时才提交，防止报错
+          git diff --staged --quiet || (git commit -m "docs: 自动更新 README 预览图 (200px)" && git push)
