@@ -1,0 +1,66 @@
+name: 自动更新README图片
+
+on:
+  push:
+    paths:
+      - '*.png'    # 当根目录有png变动时触发
+      - '*.jpg'    # 当根目录有jpg变动时触发
+      - '*.gif'    # 当根目录有gif变动时触发
+  workflow_dispatch: # 允许手动点按钮运行
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: 生成图片列表并更新 README
+        run: |
+          # 1. 定义临时文件
+          echo "" > images_list.md
+          
+          # 2. 遍历根目录下的图片文件 (png, jpg, gif)
+          # 注意：这里会按文件名排序
+          find . -maxdepth 1 -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.gif" \) | sort | while read file; do
+            # 去掉前面的 ./
+            filename=$(basename "$file")
+            # 不要把删除图层等不需要展示的图放进来，可以在这里加判断，或者统一前缀
+            # 这里生成 Markdown 语法
+            echo "### $filename" >> images_list.md
+            echo "![$filename]($filename)" >> images_list.md
+            echo "" >> images_list.md
+          done
+          
+          # 3. 使用 python 脚本把 images_list.md 的内容插入到 README 的标记之间
+          python3 -c "
+          import sys
+          
+          with open('README.md', 'r', encoding='utf-8') as f:
+              content = f.read()
+          
+          with open('images_list.md', 'r', encoding='utf-8') as f:
+              new_images = f.read()
+          
+          start_marker = '<!-- IMAGES_START -->'
+          end_marker = '<!-- IMAGES_END -->'
+          
+          if start_marker in content and end_marker in content:
+              start_idx = content.find(start_marker) + len(start_marker)
+              end_idx = content.find(end_marker)
+              new_content = content[:start_idx] + '\n' + new_images + content[end_idx:]
+              
+              with open('README.md', 'w', encoding='utf-8') as f:
+                  f.write(new_content)
+          else:
+              print('未找到标记位置，跳过更新')
+          "
+          
+      - name: 提交更改
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          # 如果 README 没变化就不提交，防止报错
+          git diff --quiet && git diff --staged --quiet || (git add README.md && git commit -m "Auto update images in README" && git push)
