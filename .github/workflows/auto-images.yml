@@ -1,91 +1,109 @@
-name: 自动更新README图片
+name: 自动处理PSD并更新README
 
 on:
   push:
     paths:
+      - '*.psd'    # 监听 PSD 变动
       - '*.png'
       - '*.jpg'
       - '*.gif'
-      - '*.jpeg'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  update-readme:
+  process-and-update:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖
+        run: pip install psd-tools Pillow
+
+      - name: 转换 PSD 为 PNG
+        run: |
+          # 使用 Python 脚本批量转换根目录下的 PSD
+          python3 -c "
+          import os
+          from psd_tools import PSDImage
+
+          # 遍历当前目录
+          for file in os.listdir('.'):
+              if file.lower().endswith('.psd'):
+                  png_name = os.path.splitext(file)[0] + '.png'
+                  
+                  # 如果 PNG 不存在，或者 PSD 比 PNG 新，则进行转换
+                  if not os.path.exists(png_name) or os.path.getmtime(file) > os.path.getmtime(png_name):
+                      print(f'正在转换: {file} -> {png_name} ...')
+                      try:
+                          psd = PSDImage.open(file)
+                          # composite() 会合并所有图层生成预览图
+                          psd.composite().save(png_name)
+                          print(f'转换成功: {png_name}')
+                      except Exception as e:
+                          print(f'转换失败 {file}: {e}')
+                  else:
+                      print(f'跳过 (已存在且最新): {file}')
+          "
+
       - name: 生成图片画廊并更新 README
         run: |
-          # 清空临时文件
           echo "" > images_list.md
-          
-          # 开始写入一个容器 div，用于居中对齐（可选）
           echo "<div align='left'>" >> images_list.md
           
-          # 遍历根目录下的图片 (排除 psd，因为浏览器不支持)
+          # 遍历图片 (此时 PSD 已经转成了 PNG，所以这里只需要找图片文件)
+          # 注意：排除了 images_list.md 自身引用的逻辑干扰
           find . -maxdepth 1 -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.gif" \) | sort | while read file; do
             filename=$(basename "$file")
             
-            # --- 核心修改区域 ---
-            
-            # 使用 HTML 拼接：
-            # 1. display: inline-block 让图片并排显示
-            # 2. width='200' 设置宽度
-            # 3. 增加链接 <a href...> 点击可看大图
-            # 4. 底部加上文件名显示
-            
+            # --- 样式设置 (200px宽度，圆角，点击看大图) ---
             echo "<div style='display: inline-block; margin: 10px; text-align: center; vertical-align: top;'>" >> images_list.md
             echo "  <a href='$filename' target='_blank'>" >> images_list.md
-            echo "    <img src='$filename' width='200' alt='$filename' style='border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: transform 0.2s;'>" >> images_list.md
+            echo "    <img src='$filename' width='200' alt='$filename' style='border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);'>" >> images_list.md
             echo "  </a>" >> images_list.md
-            echo "  <p style='font-size: 12px; color: #666; margin-top: 5px;'>$filename</p>" >> images_list.md
+            # 移除后缀名显示，更简洁，或者保留
+            display_name="${filename%.*}"
+            echo "  <p style='font-size: 12px; color: #666; margin-top: 5px;'>$display_name</p>" >> images_list.md
             echo "</div>" >> images_list.md
-            
-            # --------------------
+            # ----------------------------------------
             
           done
           
           echo "</div>" >> images_list.md
           
-          # Python 替换脚本（保持不变）
+          # 更新 README 内容
           python3 -c "
           import sys
-          
-          # 读取 README
           try:
-              with open('README.md', 'r', encoding='utf-8') as f:
-                  content = f.read()
-          except FileNotFoundError:
-              print('找不到 README.md')
-              sys.exit(1)
+              with open('README.md', 'r', encoding='utf-8') as f: content = f.read()
+          except: sys.exit(0)
           
-          # 读取新生成的图片列表
-          with open('images_list.md', 'r', encoding='utf-8') as f:
-              new_images = f.read()
+          with open('images_list.md', 'r', encoding='utf-8') as f: new_images = f.read()
           
-          start_marker = '<!-- IMAGES_START -->'
-          end_marker = '<!-- IMAGES_END -->'
+          start = '<!-- IMAGES_START -->'
+          end = '<!-- IMAGES_END -->'
           
-          if start_marker in content and end_marker in content:
-              start_idx = content.find(start_marker) + len(start_marker)
-              end_idx = content.find(end_marker)
-              
-              # 拼接新内容
-              new_content = content[:start_idx] + '\n' + new_images + '\n' + content[end_idx:]
-              
-              with open('README.md', 'w', encoding='utf-8') as f:
-                  f.write(new_content)
-              print('README 更新成功')
-          else:
-              print('未找到标记位置 <!-- IMAGES_START --> 和 <!-- IMAGES_END -->，跳过更新')
+          if start in content and end in content:
+              s_idx = content.find(start) + len(start)
+              e_idx = content.find(end)
+              new_content = content[:s_idx] + '\n' + new_images + '\n' + content[e_idx:]
+              with open('README.md', 'w', encoding='utf-8') as f: f.write(new_content)
           "
 
-      - name: 提交更改
+      - name: 提交更改 (包括生成的PNG和README)
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
-          git diff --quiet && git diff --staged --quiet || (git add README.md && git commit -m "Auto update gallery in README" && git push)
+          
+          # 添加生成的 PNG 文件
+          git add *.png
+          git add README.md
+          
+          # 如果有变化则提交
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto convert PSD to PNG and update README" && git push)
