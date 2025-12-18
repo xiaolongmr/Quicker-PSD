@@ -3,7 +3,7 @@ name: 自动处理PSD并更新README
 on:
   push:
     paths:
-      - '*.psd'    # 监听 PSD 变动
+      - '*.psd'    
       - '*.png'
       - '*.jpg'
       - '*.gif'
@@ -28,22 +28,16 @@ jobs:
 
       - name: 转换 PSD 为 PNG
         run: |
-          # 使用 Python 脚本批量转换根目录下的 PSD
           python3 -c "
           import os
           from psd_tools import PSDImage
-
-          # 遍历当前目录
           for file in os.listdir('.'):
               if file.lower().endswith('.psd'):
                   png_name = os.path.splitext(file)[0] + '.png'
-                  
-                  # 如果 PNG 不存在，或者 PSD 比 PNG 新，则进行转换
                   if not os.path.exists(png_name) or os.path.getmtime(file) > os.path.getmtime(png_name):
                       print(f'正在转换: {file} -> {png_name} ...')
                       try:
                           psd = PSDImage.open(file)
-                          # composite() 会合并所有图层生成预览图
                           psd.composite().save(png_name)
                           print(f'转换成功: {png_name}')
                       except Exception as e:
@@ -52,30 +46,28 @@ jobs:
                       print(f'跳过 (已存在且最新): {file}')
           "
 
-      - name: 生成图片画廊并更新 README
+      - name: 生成图片表格并更新 README
         run: |
           echo "" > images_list.md
-          echo "<div style='column-count: 5; column-gap: 10px;'>" >> images_list.md
+          # 表格布局：每行1列（或可调整columns参数改每行多列）
+          echo "<table style='border-collapse: separate; border-spacing: 10px;'>" >> images_list.md
           
-          # 遍历图片 (此时 PSD 已经转成了 PNG，所以这里只需要找图片文件)
-          # 注意：排除了 images_list.md 自身引用的逻辑干扰
           find . -maxdepth 1 -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.gif" \) | sort | while read file; do
             filename=$(basename "$file")
-            
-            # --- 瀑布流样式设置 (100px宽度，圆角，点击看大图) ---
-            echo "<div style='margin: 10px; text-align: center; break-inside: avoid;'>" >> images_list.md
-            echo "  <a href='$filename' target='_blank'>" >> images_list.md
-            echo "    <img src='$filename' width='100' alt='$filename' style='border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);'>" >> images_list.md
-            echo "  </a>" >> images_list.md
-            # 移除后缀名显示，更简洁，或者保留
             display_name="${filename%.*}"
-            echo "  <p style='font-size: 12px; color: #666; margin-top: 5px;'>$display_name</p>" >> images_list.md
-            echo "</div>" >> images_list.md
-            # ----------------------------------------
             
+            # 每个图片占一个单元格
+            echo "<tr>" >> images_list.md
+            echo "  <td style='text-align: center; vertical-align: top;'>" >> images_list.md
+            echo "    <a href='$filename' target='_blank'>" >> images_list.md
+            echo "      <img src='$filename' width='100' alt='$filename' style='border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);'>" >> images_list.md
+            echo "    </a>" >> images_list.md
+            echo "    <p style='font-size: 12px; color: #666; margin-top: 5px;'>$display_name</p>" >> images_list.md
+            echo "  </td>" >> images_list.md
+            echo "</tr>" >> images_list.md
           done
           
-          echo "</div>" >> images_list.md
+          echo "</table>" >> images_list.md
           
           # 更新 README 内容
           python3 -c "
@@ -96,14 +88,12 @@ jobs:
               with open('README.md', 'w', encoding='utf-8') as f: f.write(new_content)
           "
 
-      - name: 提交更改 (包括生成的PNG和README)
+      - name: 提交更改
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
           
-          # 添加生成的 PNG 文件
           git add *.png
           git add README.md
           
-          # 如果有变化则提交
           git diff --quiet && git diff --staged --quiet || (git commit -m "Auto convert PSD to PNG and update README" && git push)
