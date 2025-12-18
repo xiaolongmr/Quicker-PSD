@@ -6,7 +6,8 @@ on:
       - '*.png'
       - '*.jpg'
       - '*.gif'
-  workflow_dispatch: # 允许手动点击运行
+      - '*.jpeg'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,41 +17,55 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
-      - name: 生成图片列表并更新 README
+
+      - name: 生成图片画廊并更新 README
         run: |
-          # 创建临时文件存放图片代码
+          # 清空临时文件
           echo "" > images_list.md
           
-          # 遍历根目录下的图片文件 (png, jpg, gif)，按名称排序
-          find . -maxdepth 1 -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.gif" \) | sort | while read file; do
+          # 开始写入一个容器 div，用于居中对齐（可选）
+          echo "<div align='left'>" >> images_list.md
+          
+          # 遍历根目录下的图片 (排除 psd，因为浏览器不支持)
+          find . -maxdepth 1 -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.gif" \) | sort | while read file; do
             filename=$(basename "$file")
             
-            # 写入图片 HTML 标签，设置宽度为 200px
-            # 如果不需要标题，可以删掉下面这行 echo "#### $filename"
-            echo "#### $filename" >> images_list.md
-            echo "<img src='./$filename' width='200' alt='$filename' style='border-radius: 4px;'>" >> images_list.md
-            echo -e "\n" >> images_list.md
+            # --- 核心修改区域 ---
+            
+            # 使用 HTML 拼接：
+            # 1. display: inline-block 让图片并排显示
+            # 2. width='200' 设置宽度
+            # 3. 增加链接 <a href...> 点击可看大图
+            # 4. 底部加上文件名显示
+            
+            echo "<div style='display: inline-block; margin: 10px; text-align: center; vertical-align: top;'>" >> images_list.md
+            echo "  <a href='$filename' target='_blank'>" >> images_list.md
+            echo "    <img src='$filename' width='200' alt='$filename' style='border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: transform 0.2s;'>" >> images_list.md
+            echo "  </a>" >> images_list.md
+            echo "  <p style='font-size: 12px; color: #666; margin-top: 5px;'>$filename</p>" >> images_list.md
+            echo "</div>" >> images_list.md
+            
+            # --------------------
+            
           done
           
-          # 使用 Python 脚本将生成的图片代码插入到标记位
+          echo "</div>" >> images_list.md
+          
+          # Python 替换脚本（保持不变）
           python3 -c "
           import sys
-          import os
-
-          readme_path = 'README.md'
-          if not os.path.exists(readme_path):
-              print('README.md 不存在')
-              sys.exit(0)
-
-          with open(readme_path, 'r', encoding='utf-8') as f:
-              content = f.read()
           
-          if os.path.exists('images_list.md'):
-              with open('images_list.md', 'r', encoding='utf-8') as f:
-                  new_images = f.read()
-          else:
-              new_images = ''
+          # 读取 README
+          try:
+              with open('README.md', 'r', encoding='utf-8') as f:
+                  content = f.read()
+          except FileNotFoundError:
+              print('找不到 README.md')
+              sys.exit(1)
+          
+          # 读取新生成的图片列表
+          with open('images_list.md', 'r', encoding='utf-8') as f:
+              new_images = f.read()
           
           start_marker = '<!-- IMAGES_START -->'
           end_marker = '<!-- IMAGES_END -->'
@@ -58,19 +73,19 @@ jobs:
           if start_marker in content and end_marker in content:
               start_idx = content.find(start_marker) + len(start_marker)
               end_idx = content.find(end_marker)
-              new_content = content[:start_idx] + '\n' + new_images + content[end_idx:]
               
-              with open(readme_path, 'w', encoding='utf-8') as f:
+              # 拼接新内容
+              new_content = content[:start_idx] + '\n' + new_images + '\n' + content[end_idx:]
+              
+              with open('README.md', 'w', encoding='utf-8') as f:
                   f.write(new_content)
-              print('README 已成功更新')
+              print('README 更新成功')
           else:
-              print('未在 README.md 中找到 <!-- IMAGES_START --> 和 <!-- IMAGES_END --> 标记')
+              print('未找到标记位置 <!-- IMAGES_START --> 和 <!-- IMAGES_END -->，跳过更新')
           "
-          
-      - name: 提交并推送更改
+
+      - name: 提交更改
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add README.md
-          # 只有在有变动时才提交，防止报错
-          git diff --staged --quiet || (git commit -m "docs: 自动更新 README 预览图 (200px)" && git push)
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git diff --quiet && git diff --staged --quiet || (git add README.md && git commit -m "Auto update gallery in README" && git push)
