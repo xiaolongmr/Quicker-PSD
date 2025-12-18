@@ -2,7 +2,7 @@
 # 复制此文件并重命名为 config.txt 以使用自定义配置
 
 # 每行显示的图片数量（2-6之间推荐）
-images_per_row=4
+images_per_row=5
 
 # 图片大小，单位为像素（80-200之间推荐）
 image_size=100
