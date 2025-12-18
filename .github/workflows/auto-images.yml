@@ -55,17 +55,17 @@ jobs:
       - name: 生成图片画廊并更新 README
         run: |
           echo "" > images_list.md
-          echo "<div align='left'>" >> images_list.md
+          echo "<div style='column-count: 5; column-gap: 10px;'>" >> images_list.md
           
           # 遍历图片 (此时 PSD 已经转成了 PNG，所以这里只需要找图片文件)
           # 注意：排除了 images_list.md 自身引用的逻辑干扰
           find . -maxdepth 1 -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.gif" \) | sort | while read file; do
             filename=$(basename "$file")
             
-            # --- 样式设置 (200px宽度，圆角，点击看大图) ---
-            echo "<div style='display: inline-block; margin: 10px; text-align: center; vertical-align: top;'>" >> images_list.md
+            # --- 瀑布流样式设置 (100px宽度，圆角，点击看大图) ---
+            echo "<div style='margin: 10px; text-align: center; break-inside: avoid;'>" >> images_list.md
             echo "  <a href='$filename' target='_blank'>" >> images_list.md
-            echo "    <img src='$filename' width='200' alt='$filename' style='border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);'>" >> images_list.md
+            echo "    <img src='$filename' width='100' alt='$filename' style='border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);'>" >> images_list.md
             echo "  </a>" >> images_list.md
             # 移除后缀名显示，更简洁，或者保留
             display_name="${filename%.*}"
