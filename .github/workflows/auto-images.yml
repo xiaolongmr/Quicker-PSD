@@ -3,11 +3,9 @@ name: 自动处理PSD并更新README
 on:
   push:
     paths:
-      - '*.psd'    # 监听 PSD 变动
-      - '*.png'
-      - '*.jpg'
-      - '*.gif'
-      - 'config.txt'  # 监听配置文件变动
+      - '*.psd'       # 监听 PSD 变动
+      - 'data.json'   # 关键：监听 JSON 数据变动
+      - 'config.txt'  # 监听配置变动
   workflow_dispatch:
 
 permissions:
@@ -18,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        with:
+          fetch-depth: 2 #以此获取变动文件列表
 
       - name: 设置 Python 环境
         uses: actions/setup-python@v4
@@ -27,129 +27,179 @@ jobs:
       - name: 安装依赖
         run: pip install psd-tools Pillow
 
-      - name: 转换 PSD 为 PNG
+      - name: 处理数据与生成图片
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          # 使用 Python 脚本批量转换根目录下的 PSD
           python3 -c "
           import os
+          import json
+          import re
+          import subprocess
           from psd_tools import PSDImage
 
-          # 遍历当前目录
+          DATA_FILE = 'data.json'
+          IMAGE_SIZE = 100 # 默认大小，后续会尝试从config读取
+
+          # --- 1. 读取或初始化 JSON ---
+          if os.path.exists(DATA_FILE):
+              try:
+                  with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                      data = json.load(f)
+              except:
+                  data = {}
+          else:
+              data = {}
+
+          # --- 2. 获取本次提交变动的文件 (用于判断是否应用 Commit Message) ---
+          try:
+              # 获取本次 commit 变动的文件列表
+              cmd = 'git diff --name-only HEAD~1 HEAD'
+              changed_files = subprocess.check_output(cmd, shell=True).decode().splitlines()
+          except:
+              changed_files = []
+
+          # 解析 Commit Message
+          commit_msg = os.environ.get('COMMIT_MSG', '')
+          new_name = ''
+          new_url = ''
+          
+          if commit_msg:
+              lines = commit_msg.strip().split('\n')
+              if lines:
+                  new_name = lines[0].strip() # 第一行做名称
+                  # 寻找 URL
+                  url_pattern = re.compile(r'(https?://[^\s]+)')
+                  for line in lines:
+                      match = url_pattern.search(line)
+                      if match:
+                          new_url = match.group(1)
+                          break
+
+          # --- 3. 扫描目录下的 PSD 并更新 JSON ---
+          current_psds = []
           for file in os.listdir('.'):
               if file.lower().endswith('.psd'):
-                  png_name = os.path.splitext(file)[0] + '.png'
+                  current_psds.append(file)
                   
-                  # 如果 PNG 不存在，或者 PSD 比 PNG 新，则进行转换
-                  if not os.path.exists(png_name) or os.path.getmtime(file) > os.path.getmtime(png_name):
-                      print(f'正在转换: {file} -> {png_name} ...')
-                      try:
-                          psd = PSDImage.open(file)
-                          # composite() 会合并所有图层生成预览图
-                          psd.composite().save(png_name)
-                          print(f'转换成功: {png_name}')
-                      except Exception as e:
-                          print(f'转换失败 {file}: {e}')
-                  else:
-                      print(f'跳过 (已存在且最新): {file}')
-          "
+                  # 如果 JSON 中没有这个文件，或者文件是本次提交且不在JSON里
+                  if file not in data:
+                      entry = {
+                          'file': file,
+                          'name': os.path.splitext(file)[0], # 默认文件名
+                          'url': ''
+                      }
+                      
+                      # 只有当这个文件在本次变动列表中，才尝试使用 Commit 信息填充
+                      if file in changed_files and new_name:
+                          print(f'[信息] 检测到新文件 {file}，应用提交信息: {new_name}')
+                          entry['name'] = new_name
+                          if new_url:
+                              entry['url'] = new_url
+                      
+                      data[file] = entry
 
-      - name: 生成图片画廊并更新 README
-        run: |
-          # 读取配置文件
-          python3 -c "
-          import os
-          import re
+          # 清理 JSON 中已经不存在的文件
+          for key in list(data.keys()):
+              if key not in current_psds:
+                  del data[key]
 
-          # 默认配置
+          # 保存更新后的 JSON
+          with open(DATA_FILE, 'w', encoding='utf-8') as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+
+          # --- 4. 转换 PSD 为 PNG ---
+          for file in current_psds:
+              png_name = os.path.splitext(file)[0] + '.png'
+              # 只有 PNG 不存在或 PSD 更新了才转换
+              if not os.path.exists(png_name) or os.path.getmtime(file) > os.path.getmtime(png_name):
+                  print(f'正在转换: {file} -> {png_name} ...')
+                  try:
+                      psd = PSDImage.open(file)
+                      psd.composite().save(png_name)
+                  except Exception as e:
+                      print(f'转换失败 {file}: {e}')
+
+          # --- 5. 生成 README 画廊 ---
+          
+          # 读取 Config 配置
           images_per_row = 4
-          image_size = 100
-
-          # 读取配置文件
           if os.path.exists('config.txt'):
               with open('config.txt', 'r', encoding='utf-8') as f:
-                  for line in f:
-                      line = line.strip()
-                      if line.startswith('images_per_row='):
-                          try:
-                              images_per_row = int(re.search(r'images_per_row=(\d+)', line).group(1))
-                          except:
-                              pass
-                      elif line.startswith('image_size='):
-                          try:
-                              image_size = int(re.search(r'image_size=(\d+)', line).group(1))
-                          except:
-                              pass
-
-          print(f'使用配置: 每行 {images_per_row} 个图片，图片大小 {image_size}px')
-
-          # 生成图片列表
-          with open('images_list.md', 'w', encoding='utf-8') as f:
-              f.write('<table style=\"border-collapse: separate; border-spacing: 10px; margin: 0 auto;\">\n')
-              
-              # 获取所有图片文件
-              image_files = []
-              for file in os.listdir('.'):
-                  if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
-                      image_files.append(file)
-              image_files.sort()
-              
-              # 生成表格
-              for i in range(0, len(image_files), images_per_row):
-                  row_files = image_files[i:i + images_per_row]
-                  f.write('  <tr>\n')
-                  
-                  for file in row_files:
-                      display_name = os.path.splitext(file)[0]
-                      f.write(f'    <td style=\"text-align: center; vertical-align: middle; padding: 10px;\">\n')
-                      f.write(f'      <a href=\"{file}\" target=\"_blank\">\n')
-                      f.write(f'        <img src=\"{file}\" width=\"{image_size}\" alt=\"{file}\" style=\"border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: block; margin: 0 auto;\">\n')
-                      f.write(f'      </a>\n')
-                      f.write(f'      <p style=\"font-size: 12px; color: #666; margin-top: 5px; text-align: center;\">{display_name}</p>\n')
-                      f.write(f'    </td>\n')
-                  
-                  # 如果最后一行不足，用空单元格补齐
-                  if len(row_files) < images_per_row:
-                      for _ in range(images_per_row - len(row_files)):
-                          f.write('    <td></td>\n')
-                  
-                  f.write('  </tr>\n')
-              
-              f.write('</table>\n')
-
-          # 更新 README 内容
-          try:
-              with open('README.md', 'r', encoding='utf-8') as f:
                   content = f.read()
-          except:
-              content = ''
+                  r_row = re.search(r'images_per_row=(\d+)', content)
+                  r_size = re.search(r'image_size=(\d+)', content)
+                  if r_row: images_per_row = int(r_row.group(1))
+                  if r_size: IMAGE_SIZE = int(r_size.group(1))
 
-          with open('images_list.md', 'r', encoding='utf-8') as f:
-              new_images = f.read()
+          # 按照文件修改时间倒序排序（新的在前），或者你可以改为按文件名排序
+          # 这里我们把 data 转换为列表进行排序
+          sorted_items = sorted(data.values(), key=lambda x: x['name']) 
+          # 如果想按上传时间倒序，可以使用 os.path.getmtime(x['file'])
+
+          html_parts = []
+          html_parts.append(f'<table style=\"border-collapse: separate; border-spacing: 10px; margin: 0 auto;\">')
+          
+          item_list = list(sorted_items)
+          for i in range(0, len(item_list), images_per_row):
+              row_items = item_list[i:i + images_per_row]
+              html_parts.append('  <tr>')
+              
+              for item in row_items:
+                  f_name = item['file']
+                  d_name = item.get('name', f_name)
+                  d_url = item.get('url', '')
+                  img_path = os.path.splitext(f_name)[0] + '.png'
+                  
+                  # 确定点击链接：如果有 URL 则用 URL，否则用图片大图
+                  link_href = d_url if d_url else img_path
+
+                  html_parts.append(f'    <td style=\"text-align: center; vertical-align: middle; padding: 10px;\">')
+                  html_parts.append(f'      <a href=\"{link_href}\" target=\"_blank\">')
+                  html_parts.append(f'        <img src=\"{img_path}\" width=\"{IMAGE_SIZE}\" alt=\"{d_name}\" style=\"border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: block; margin: 0 auto;\">')
+                  html_parts.append(f'      </a>')
+                  html_parts.append(f'      <p style=\"font-size: 12px; color: #666; margin-top: 5px; text-align: center;\">{d_name}</p>')
+                  html_parts.append(f'    </td>')
+
+              # 补齐空格子
+              if len(row_items) < images_per_row:
+                  for _ in range(images_per_row - len(row_items)):
+                      html_parts.append('    <td></td>')
+              
+              html_parts.append('  </tr>')
+          html_parts.append('</table>')
+
+          new_gallery_html = '\n'.join(html_parts)
+
+          # 更新 README
+          readme_path = 'README.md'
+          if os.path.exists(readme_path):
+              with open(readme_path, 'r', encoding='utf-8') as f:
+                  content = f.read()
+          else:
+              content = ''
 
           start_marker = '<!-- IMAGES_START -->'
           end_marker = '<!-- IMAGES_END -->'
 
           if start_marker in content and end_marker in content:
-              # 在现有标记之间插入
-              start_idx = content.find(start_marker) + len(start_marker)
-              end_idx = content.find(end_marker)
-              new_content = content[:start_idx] + '\n' + new_images + '\n' + content[end_idx:]
+              s_idx = content.find(start_marker) + len(start_marker)
+              e_idx = content.find(end_marker)
+              final_content = content[:s_idx] + '\n' + new_gallery_html + '\n' + content[e_idx:]
           else:
-              # 如果没有标记，添加到文件末尾
-              new_content = content + '\n\n' + start_marker + '\n' + new_images + '\n' + end_marker + '\n'
+              final_content = content + '\n\n' + start_marker + '\n' + new_gallery_html + '\n' + end_marker + '\n'
 
-          with open('README.md', 'w', encoding='utf-8') as f:
-              f.write(new_content)
+          with open(readme_path, 'w', encoding='utf-8') as f:
+              f.write(final_content)
           "
 
-      - name: 提交更改 (包括生成的PNG和README)
+      - name: 提交更改
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
           
-          # 添加生成的 PNG 文件
           git add *.png
           git add README.md
+          git add data.json
           
-          # 如果有变化则提交
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto convert PSD to PNG and update README" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto update: JSON, PNG and README" && git push)
