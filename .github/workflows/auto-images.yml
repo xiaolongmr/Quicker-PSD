@@ -1,11 +1,12 @@
-name: 自动处理PSD并更新README
+name: 自动处理PSD/PNG并更新README
 
 on:
   push:
     paths:
-      - '*.psd'       # 监听 PSD 变动
-      - 'data.json'   # 关键：监听 JSON 数据变动
-      - 'config.txt'  # 监听配置变动
+      - '*.psd'       # 监听 PSD
+      - '*.png'       # 监听 PNG (支持纯图上传)
+      - 'data.json'   # 监听 JSON 修改
+      - 'config.txt'  # 监听配置
   workflow_dispatch:
 
 permissions:
@@ -17,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: 2 #以此获取变动文件列表
+          fetch-depth: 2 
 
       - name: 设置 Python 环境
         uses: actions/setup-python@v4
@@ -27,7 +28,7 @@ jobs:
       - name: 安装依赖
         run: pip install psd-tools Pillow
 
-      - name: 处理数据与生成图片
+      - name: 处理数据与生成内容
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
@@ -39,7 +40,7 @@ jobs:
           from psd_tools import PSDImage
 
           DATA_FILE = 'data.json'
-          IMAGE_SIZE = 100 # 默认大小，后续会尝试从config读取
+          IMAGE_SIZE = 100 # 默认配置
 
           # --- 1. 读取或初始化 JSON ---
           if os.path.exists(DATA_FILE):
@@ -51,78 +52,100 @@ jobs:
           else:
               data = {}
 
-          # --- 2. 获取本次提交变动的文件 (用于判断是否应用 Commit Message) ---
+          # --- 2. 解析 Commit 信息获取 URL ---
+          # 逻辑：如果本次提交包含 URL，则提取出来备用
+          commit_msg = os.environ.get('COMMIT_MSG', '')
+          new_url = ''
+          if commit_msg:
+              url_pattern = re.compile(r'(https?://[^\s]+)')
+              match = url_pattern.search(commit_msg)
+              if match:
+                  new_url = match.group(1)
+
+          # 获取本次变动的文件列表 (用于只给新文件绑定 URL)
           try:
-              # 获取本次 commit 变动的文件列表
               cmd = 'git diff --name-only HEAD~1 HEAD'
               changed_files = subprocess.check_output(cmd, shell=True).decode().splitlines()
           except:
               changed_files = []
 
-          # 解析 Commit Message
-          commit_msg = os.environ.get('COMMIT_MSG', '')
-          new_name = ''
-          new_url = ''
+          # --- 3. 扫描文件并构建/更新数据 ---
           
-          if commit_msg:
-              lines = commit_msg.strip().split('\n')
-              if lines:
-                  new_name = lines[0].strip() # 第一行做名称
-                  # 寻找 URL
-                  url_pattern = re.compile(r'(https?://[^\s]+)')
-                  for line in lines:
-                      match = url_pattern.search(line)
-                      if match:
-                          new_url = match.group(1)
-                          break
+          # 获取当前目录下所有实际存在的 PSD 和 PNG
+          all_psds = {f for f in os.listdir('.') if f.lower().endswith('.psd')}
+          all_pngs = {f for f in os.listdir('.') if f.lower().endswith('.png')}
+          
+          # 用于记录处理过的 Key，防止 JSON 里残留删除文件的垃圾数据
+          processed_keys = set()
 
-          # --- 3. 扫描目录下的 PSD 并更新 JSON ---
-          current_psds = []
-          for file in os.listdir('.'):
-              if file.lower().endswith('.psd'):
-                  current_psds.append(file)
-                  
-                  # 如果 JSON 中没有这个文件，或者文件是本次提交且不在JSON里
-                  if file not in data:
-                      entry = {
-                          'file': file,
-                          'name': os.path.splitext(file)[0], # 默认文件名
-                          'url': ''
-                      }
-                      
-                      # 只有当这个文件在本次变动列表中，才尝试使用 Commit 信息填充
-                      if file in changed_files and new_name:
-                          print(f'[信息] 检测到新文件 {file}，应用提交信息: {new_name}')
-                          entry['name'] = new_name
-                          if new_url:
-                              entry['url'] = new_url
-                      
-                      data[file] = entry
+          # --- 处理 A：PSD 文件 ---
+          for psd_file in all_psds:
+              key = os.path.splitext(psd_file)[0] # 文件名作为 Key (即显示名称)
+              png_name = key + '.png'
+              
+              # PSD 转 PNG 逻辑
+              if not os.path.exists(png_name) or os.path.getmtime(psd_file) > os.path.getmtime(png_name):
+                  print(f'正在转换 PSD: {psd_file} -> {png_name}')
+                  try:
+                      psd = PSDImage.open(psd_file)
+                      psd.composite().save(png_name)
+                  except Exception as e:
+                      print(f'转换失败 {psd_file}: {e}')
 
-          # 清理 JSON 中已经不存在的文件
-          for key in list(data.keys()):
-              if key not in current_psds:
-                  del data[key]
+              # 更新 JSON 数据
+              if key not in data:
+                  data[key] = {'file': psd_file, 'img': png_name, 'url': ''}
+              else:
+                  # 确保 file 字段正确（防止从纯PNG变为PSD模式）
+                  data[key]['file'] = psd_file
+                  data[key]['img'] = png_name
 
-          # 保存更新后的 JSON
+              # 如果是本次提交的文件且 commit 有 URL，且原 URL 为空(或想覆盖)，则更新
+              if psd_file in changed_files and new_url:
+                   print(f'为 {key} 绑定 URL: {new_url}')
+                   data[key]['url'] = new_url
+              
+              processed_keys.add(key)
+
+          # --- 处理 B：纯 PNG 文件 (没有对应 PSD 的) ---
+          for png_file in all_pngs:
+              key = os.path.splitext(png_file)[0]
+              
+              # 如果这个 Key 已经被 PSD 处理过，说明它是 PSD 生成的预览图，跳过
+              if key in processed_keys:
+                  continue
+              
+              # 这是一个独立的 PNG
+              if key not in data:
+                  data[key] = {'file': '', 'img': png_file, 'url': ''}
+              else:
+                  # 确保 file 字段为空
+                  data[key]['file'] = ''
+                  data[key]['img'] = png_file
+              
+              if png_file in changed_files and new_url:
+                  print(f'为 {key} 绑定 URL: {new_url}')
+                  data[key]['url'] = new_url
+
+              processed_keys.add(key)
+
+          # --- 4. 清理旧数据 ---
+          # 删除 JSON 中存在，但文件夹里既没有 PSD 也没有独立 PNG 的条目
+          keys_to_delete = []
+          for k in data.keys():
+              if k not in processed_keys:
+                  keys_to_delete.append(k)
+          
+          for k in keys_to_delete:
+              del data[k]
+
+          # 保存 JSON
           with open(DATA_FILE, 'w', encoding='utf-8') as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
 
-          # --- 4. 转换 PSD 为 PNG ---
-          for file in current_psds:
-              png_name = os.path.splitext(file)[0] + '.png'
-              # 只有 PNG 不存在或 PSD 更新了才转换
-              if not os.path.exists(png_name) or os.path.getmtime(file) > os.path.getmtime(png_name):
-                  print(f'正在转换: {file} -> {png_name} ...')
-                  try:
-                      psd = PSDImage.open(file)
-                      psd.composite().save(png_name)
-                  except Exception as e:
-                      print(f'转换失败 {file}: {e}')
-
           # --- 5. 生成 README 画廊 ---
           
-          # 读取 Config 配置
+          # 读取 Config
           images_per_row = 4
           if os.path.exists('config.txt'):
               with open('config.txt', 'r', encoding='utf-8') as f:
@@ -132,36 +155,51 @@ jobs:
                   if r_row: images_per_row = int(r_row.group(1))
                   if r_size: IMAGE_SIZE = int(r_size.group(1))
 
-          # 按照文件修改时间倒序排序（新的在前），或者你可以改为按文件名排序
-          # 这里我们把 data 转换为列表进行排序
-          sorted_items = sorted(data.values(), key=lambda x: x['name']) 
-          # 如果想按上传时间倒序，可以使用 os.path.getmtime(x['file'])
+          # 排序：按照 key (文件名) 排序
+          sorted_items = sorted(data.items(), key=lambda x: x[0])
 
           html_parts = []
           html_parts.append(f'<table style=\"border-collapse: separate; border-spacing: 10px; margin: 0 auto;\">')
           
-          item_list = list(sorted_items)
-          for i in range(0, len(item_list), images_per_row):
-              row_items = item_list[i:i + images_per_row]
+          # 将字典转换为列表以便切片
+          items_list = [v for k, v in sorted_items]
+          # 注意：sorted_items 是 (key, value) 元组，我们需要把 key 也传进去或者直接用文件名
+          # 重新整理一下 item 数据，把 name (key) 放进去方便使用
+          display_list = []
+          for k, v in sorted_items:
+              temp = v.copy()
+              temp['name'] = k
+              display_list.append(temp)
+
+          for i in range(0, len(display_list), images_per_row):
+              row_items = display_list[i:i + images_per_row]
               html_parts.append('  <tr>')
               
               for item in row_items:
-                  f_name = item['file']
-                  d_name = item.get('name', f_name)
-                  d_url = item.get('url', '')
-                  img_path = os.path.splitext(f_name)[0] + '.png'
+                  name = item['name']
+                  img_src = item['img']
+                  url = item.get('url', '')
                   
-                  # 确定点击链接：如果有 URL 则用 URL，否则用图片大图
-                  link_href = d_url if d_url else img_path
-
+                  # 核心逻辑：图片链接到大图，P标签链接到URL
+                  
                   html_parts.append(f'    <td style=\"text-align: center; vertical-align: middle; padding: 10px;\">')
-                  html_parts.append(f'      <a href=\"{link_href}\" target=\"_blank\">')
-                  html_parts.append(f'        <img src=\"{img_path}\" width=\"{IMAGE_SIZE}\" alt=\"{d_name}\" style=\"border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: block; margin: 0 auto;\">')
+                  
+                  # 图片部分 -> 点击看大图
+                  html_parts.append(f'      <a href=\"{img_src}\" target=\"_blank\">')
+                  html_parts.append(f'        <img src=\"{img_src}\" width=\"{IMAGE_SIZE}\" alt=\"{name}\" style=\"border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: block; margin: 0 auto;\">')
                   html_parts.append(f'      </a>')
-                  html_parts.append(f'      <p style=\"font-size: 12px; color: #666; margin-top: 5px; text-align: center;\">{d_name}</p>')
+                  
+                  # 文字部分 -> 如果有URL，生成A标签；否则只显示文字
+                  html_parts.append(f'      <p style=\"font-size: 12px; color: #666; margin-top: 5px; text-align: center;\">')
+                  if url:
+                      html_parts.append(f'        <a href=\"{url}\" target=\"_blank\" style=\"text-decoration: none; color: #0366d6;\">{name}</a>')
+                  else:
+                      html_parts.append(f'        {name}')
+                  html_parts.append(f'      </p>')
+                  
                   html_parts.append(f'    </td>')
 
-              # 补齐空格子
+              # 补齐
               if len(row_items) < images_per_row:
                   for _ in range(images_per_row - len(row_items)):
                       html_parts.append('    <td></td>')
@@ -171,7 +209,7 @@ jobs:
 
           new_gallery_html = '\n'.join(html_parts)
 
-          # 更新 README
+          # 更新 README 文件
           readme_path = 'README.md'
           if os.path.exists(readme_path):
               with open(readme_path, 'r', encoding='utf-8') as f:
@@ -198,8 +236,10 @@ jobs:
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
           
+          # 添加生成的 PNG、JSON 和 README
           git add *.png
-          git add README.md
           git add data.json
+          git add README.md
           
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto update: JSON, PNG and README" && git push)
+          # 仅当有变化时提交
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto update: JSON data and README gallery" && git push)
