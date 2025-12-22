@@ -1,22 +1,27 @@
 {
-  "填充画布.psd": {
-    "file": "填充画布.psd",
-    "name": "填充画布",
-    "url": "https://getquicker.net/Sharedaction?code=c1da5c4a-b3df-4b06-9203-08de0708e8b9"
-  },
-  "删除图层.psd": {
+  "删除图层": {
     "file": "删除图层.psd",
-    "name": "删除图层",
+    "img": "删除图层.png",
     "url": ""
   },
-  "网格参考线.psd": {
-    "file": "网格参考线.psd",
-    "name": "网格参考线",
-    "url": "https://getquicker.net/Sharedaction?code=99a629e9-e1fa-4fbf-544b-08de40f9c963"
-  },
-  "花瓣去水印.psd": {
+  "花瓣去水印": {
     "file": "花瓣去水印.psd",
-    "name": "花瓣去水印",
-    "url": "https://getquicker.net/Sharedaction?code=57e3525b-04dd-4c00-7afd-08de25df0fc3"
+    "img": "花瓣去水印.png",
+    "url": ""
+  },
+  "网格参考线": {
+    "file": "网格参考线.psd",
+    "img": "网格参考线.png",
+    "url": ""
+  },
+  "填充画布": {
+    "file": "填充画布.psd",
+    "img": "填充画布.png",
+    "url": ""
+  },
+  "复制svg": {
+    "file": "",
+    "img": "复制svg.png",
+    "url": ""
   }
 }
